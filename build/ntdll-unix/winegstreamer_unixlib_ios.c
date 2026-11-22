@@ -2186,10 +2186,13 @@ static NTSTATUS wma_transform_notify_qos( void *args )
  * AudioToolbox, wg_parser_apple_ios.c).  MADEIRA_WG_VIDEO=0 restores the
  * ml1980 MP3/WAV-only behaviour (an MP4 is refused at connect).
  * MADEIRA_WG_VIDEO_FORMAT=nv12|i420|yv12|yuy2|rgb32|argb32|abgr32 picks the
- * native format a video stream reports (default nv12: what the hardware
- * decoder produces, and the first format media_source.c offers anyway); only
- * the native format and media_source.c's YUV list become media types, so a
- * consumer that insists on RGB can be served by choosing it here.
+ * native format a video stream reports.  It defaults to rgb32 (MAV_PIX_BGRx,
+ * DXGI_FORMAT_B8G8R8X8_UNORM) because media_source.c always appends NV12,
+ * YV12, YUY2, I420 and IYUV after types[0]: reporting rgb32 natively
+ * exposes [RGB32, NV12, YV12, YUY2, I420, IYUV] with zero duplicates, so
+ * D3D11/Unity IMFSourceReader consumers (where DXMT supports B8G8R8X8_UNORM
+ * and refuses NV12, and msvproc.dll/colorcnv.dll are not shipped) match RGB32
+ * directly while YUV consumers still match the YUV entries.
  *
  * A parser has up to MAV_MAX_STREAMS streams.  Each stream handle is a
  * separate object inside the parser so a parser handle passed as a stream
@@ -2245,11 +2248,11 @@ static enum mav_pixel_format wg_video_native_format(void)
     const char *v = getenv( "MADEIRA_WG_VIDEO_FORMAT" );
     unsigned int i;
 
-    if (!v || !*v) return MAV_PIX_NV12;
+    if (!v || !*v) return MAV_PIX_BGRx;
     for (i = 0; i < ARRAY_SIZE(names); i++)
         if (!strcasecmp( v, names[i].name )) return names[i].fmt;
-    mav_log( "MADEIRA_WG_VIDEO_FORMAT=%.16s is not one of nv12/i420/yv12/yuy2/rgb32/argb32/abgr32; using nv12", v );
-    return MAV_PIX_NV12;
+    mav_log( "MADEIRA_WG_VIDEO_FORMAT=%.16s is not one of nv12/i420/yv12/yuy2/rgb32/argb32/abgr32; using rgb32", v );
+    return MAV_PIX_BGRx;
 }
 
 static pthread_once_t wgp_config_once = PTHREAD_ONCE_INIT;
@@ -2729,13 +2732,14 @@ static NTSTATUS wgp_seek( void *args )
     return wgp_status( mav_seek( parser->core, index, set_start, params->start_pos, set_stop, params->stop_pos ) );
 }
 
-/* A 64-bit (ARM64EC) caller has this table by default for the WMA decoder
- * (virtual_ios.c, ios_wg_64bit_enabled); its parser is refused as before
- * unless MADEIRA_WG_64BIT=1. */
+/* 64-bit (ARM64EC) callers get wg_parser by default alongside the 32-bit wow64
+ * path so x64 Media Foundation / DirectShow MP4/MP3/WAV playback works out of
+ * the box; MADEIRA_WG_64BIT=0 (or MADEIRA_WG_PARSER=0 inside wgp_create) turns
+ * it off. */
 static NTSTATUS wgp_create64( void *args )
 {
     const char *e = getenv( "MADEIRA_WG_64BIT" );
-    if (!(e && e[0] == '1')) return STATUS_NOT_IMPLEMENTED;
+    if (e && e[0] == '0') return STATUS_NOT_IMPLEMENTED;
     return wgp_create( args );
 }
 

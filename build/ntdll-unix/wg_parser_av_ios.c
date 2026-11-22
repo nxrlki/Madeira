@@ -60,10 +60,11 @@
  *     bounded, with the overflow logged).  One buffer per stream is
  *     outstanding until release_buffer; S_FALSE at end of stream.
  *
- *   - video.  The native format reported by get_current_format is 4:2:0 NV12
- *     at the coded display size (MADEIRA_WG_VIDEO_FORMAT can choose another,
- *     see the glue), which media_source.c turns into NV12 / YV12 / YUY2 /
- *     I420 / IYUV media types.  stream_enable accepts NV12, I420, YV12, YUY2,
+ *   - video.  The native format reported by get_current_format defaults to
+ *     rgb32 (MAV_PIX_BGRx) in the glue (or NV12 if 0 is passed to
+ *     mav_configure; MADEIRA_WG_VIDEO_FORMAT can choose another), and
+ *     media_source.c also appends NV12 / YV12 / YUY2 / I420 / IYUV media
+ *     types.  stream_enable accepts NV12, I420, YV12, YUY2,
  *     BGRx (RGB32), BGRA (ARGB32) and RGBA (ABGR32) at the native size, with
  *     a negative height meaning bottom-up rows, exactly as wg_format says.
  *     Frames are laid out the way GStreamer lays them out (4-byte aligned
@@ -250,6 +251,10 @@ static int mav_seek( struct mav_parser *p, unsigned int stream, int set_start, u
  * stream here; it bounds the analysis of an MP3 carrying cover art, whose
  * (undecodable) picture stream would otherwise keep the analysis reading. */
 #define MAV_PROBESIZE (256 * 1024)
+/* High-bitrate 4K MP4/MOV clips can have IDR keyframes larger than 256 KB;
+ * raise probesize for ISO media after container detection while keeping
+ * MAV_PROBESIZE tight for MP3/WAV (cover-art bound). */
+#define MAV_MOV_PROBESIZE (4 * 1024 * 1024)
 /* mp3dec.c's probe gives AVPROBE_SCORE_EXTENSION / 4 to a file that starts
  * with an ID3v2 tag larger than the probe buffer; anything below that is the
  * "detected only with low score" guess that misreads other MPEG files. */
@@ -1068,6 +1073,8 @@ static int mav_connect_locked( struct mav_parser *p )
         if (type != AVMEDIA_TYPE_AUDIO && !(p->is_mov && type == AVMEDIA_TYPE_VIDEO))
             p->fmt->streams[i]->discard = AVDISCARD_ALL;
     }
+
+    if (p->is_mov) p->fmt->probesize = MAV_MOV_PROBESIZE;
 
     if ((err = avformat_find_stream_info( p->fmt, NULL )) < 0)
         return mav_refuse( p, err == AVERROR_EXIT || err == AVERROR(EIO) ? MAV_E_IO : MAV_E_UNSUPPORTED,

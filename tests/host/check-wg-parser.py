@@ -68,12 +68,13 @@ for n in enum_names:
     if n[len("unix_"):] in x64:
         assert wow64[n].startswith("wow64_"), ("pointer-carrying entry needs a wow64 thunk", n, wow64[n])
     elif n == "unix_wg_parser_create":
-        # The 64-bit table's create is wgp_create behind MADEIRA_WG_64BIT=1 (a 64-bit caller has
-        # the table for the WMA decoder; its parser stays refused unless the switch is on).
+        # The 64-bit table's create is wgp_create behind an opt-out check (MADEIRA_WG_64BIT=0
+        # disables it, otherwise 64-bit ARM64EC callers get wg_parser by default).
         assert wow64[n] == "wgp_create" and native[n] == "wgp_create64", (n, native[n], wow64[n])
         create64 = glue[glue.index("static NTSTATUS wgp_create64( void *args )"):]
         create64 = create64[:create64.index("\n}\n")]
-        assert ('getenv( "MADEIRA_WG_64BIT" )' in create64 and "return STATUS_NOT_IMPLEMENTED;" in create64
+        assert ('getenv( "MADEIRA_WG_64BIT" )' in create64 and "e[0] == '0'" in create64
+                and "e[0] == '1'" not in create64 and "return STATUS_NOT_IMPLEMENTED;" in create64
                 and create64.index("return STATUS_NOT_IMPLEMENTED;") < create64.index("return wgp_create( args );")), create64
     else:
         assert wow64[n] == native[n], ("scalar-only entry should share the 64-bit entry", n)
@@ -86,9 +87,15 @@ configure = glue[glue.index("static void wgp_configure(void)"):]
 configure = configure[:configure.index("\n}\n")]
 assert 'getenv( "MADEIRA_WG_VIDEO" )' in glue and "wg_video_switch_on()" in configure
 assert "mav_configure( video, &mav_apple_video_backend, &mav_apple_audio_backend, native )" in configure
+native_fmt = glue[glue.index("static enum mav_pixel_format wg_video_native_format(void)"):]
+native_fmt = native_fmt[:native_fmt.index("\n}\n")]
+assert "if (!v || !*v) return MAV_PIX_BGRx;" in native_fmt and "return MAV_PIX_NV12;" not in native_fmt, native_fmt
 assert '#include "wg_parser_av_ios.c"' in glue
 csrc = core.read_text()
 assert '#define MAV_TAG "[wg-parser] ml1990 "' in csrc and "#define MAV_MAX_LOGS 64" in csrc
+assert "#define MAV_MOV_PROBESIZE" in csrc
+mov_probe = csrc[csrc.index("static int mav_connect_locked("):csrc.index("avformat_find_stream_info( p->fmt, NULL )")]
+assert "if (p->is_mov) p->fmt->probesize = MAV_MOV_PROBESIZE;" in mov_probe
 # the Apple backend: its own TU, no Wine header, built and archived
 assert "#include \"windef.h\"" not in apple and "wine/" not in re.sub(r"/\*.*?\*/", "", apple, flags=re.S)
 assert '"$BUILD_DIR/wg_parser_apple_ios.c"' in build_sh and '"$OBJ_DIR/wg_parser_apple_ios.o"' in build_sh
@@ -944,6 +951,33 @@ static int test_mp4_formats( const uint8_t *mp4, size_t size )
     return 0;
 }
 
+static int test_mp4_bgrx_native( const uint8_t *mp4, size_t size )
+{
+    struct mav_parser *p; struct source s; struct mav_stream_info vi; struct mav_buffer b; uint8_t *pic; size_t px;
+
+    mav_configure( 1, &stub_video, &stub_audio, MAV_PIX_BGRx );
+    p = mav_create( 0 );
+    src_start( &s, p, mp4, size );
+    CHECK( mav_connect( p, size ) == MAV_OK && mav_stream_info( p, 0, &vi ) == MAV_OK, "connect bgrx native" );
+    CHECK( p->fmt->probesize == MAV_MOV_PROBESIZE, "mov probesize raised to %d, got %lld",
+           MAV_MOV_PROBESIZE, (long long)p->fmt->probesize );
+    CHECK( vi.vnative.fmt == MAV_PIX_BGRx && vi.vnative.width == W && vi.vnative.height == H,
+           "native fmt %s %dx%d", mav_pix_name( vi.vnative.fmt ), vi.vnative.width, vi.vnative.height );
+    CHECK( mav_enable_video( p, 0, &vi.vnative ) == MAV_OK, "enable native bgrx" );
+    CHECK( mav_seek( p, 0, 1, 0, 0, 0 ) == MAV_OK, "seek 0 bgrx" );
+    CHECK( mav_get_buffer( p, 0, &b ) == MAV_OK, "get bgrx" );
+    pic = malloc( b.size );
+    CHECK( mav_copy_buffer( p, 0, pic, 0, b.size ) == MAV_OK, "copy bgrx" );
+    if (check_picture( pic, b.size, MAV_PIX_BGRx, 0, 0, "native bgrx" )) return 1;
+    for (px = 0; px < (size_t)W * H; px++) CHECK( pic[4 * px + 3] == 0xff, "bgrx alpha pixel %zu", px );
+    free( pic );
+    mav_release_buffer( p, 0 );
+    src_stop( &s ); mav_destroy( p );
+    mav_configure( 1, &stub_video, &stub_audio, MAV_PIX_NV12 );
+    printf( "PASS: mp4 native rgb32 (bgrx) format + MAV_MOV_PROBESIZE verified (top-down, opaque alpha)\n" );
+    return 0;
+}
+
 static int test_mp4_refusals( void )
 {
     size_t size, wsize; uint8_t *m, *wav = make_wav( &wsize, 8000, 1, 800 ); struct mav_parser *p; struct source s;
@@ -1073,6 +1107,7 @@ int main( int argc, char **argv )
     if (!mp4) { printf( "FAIL: could not synthesise the mp4\n" ); return 1; }
     if (test_mp4_basic( mp4, mp4_size, frames, seconds )) return 1;
     if (test_mp4_formats( mp4, mp4_size )) return 1;
+    if (test_mp4_bgrx_native( mp4, mp4_size )) return 1;
     if (test_mp4_late_audio( mp4, mp4_size, seconds )) return 1;
     if (test_mp4_refusals()) return 1;
     if (argc > 1)
@@ -1125,6 +1160,7 @@ with tempfile.TemporaryDirectory() as t:
     assert any("connect refused (mp3, compressed_out=1)" in l for l in lines), lines
     assert any("connect refused" in l and "no enabled demuxer recognised the stream" in l for l in lines), lines
     assert any("connect container=mp4 stream=0 video codec=h264 backend=stub-video 320x240 fps=30/1 out=nv12" in l for l in lines), lines
+    assert any("connect container=mp4 stream=0 video codec=h264 backend=stub-video 320x240 fps=30/1 out=bgrx" in l for l in lines), lines
     assert any("connect container=mp4 codec=aac layer=0 rate=44100 channels=2 mask=0x3 out=f32" in l and "stream=1 backend=stub-aac" in l for l in lines), lines
     assert any("connect refused (mov,mp4,m4a,3gp,3g2,mj2, compressed_out=0): container disabled by MADEIRA_WG_VIDEO=0" in l for l in lines), lines
     assert any("connect refused (mov,mp4,m4a,3gp,3g2,mj2, compressed_out=1): compressed output requested" in l for l in lines), lines

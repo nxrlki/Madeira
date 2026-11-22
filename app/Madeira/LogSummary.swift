@@ -239,8 +239,15 @@ enum LogSummary {
                 facts.smallPool = true
             }
             if line.contains("SMALL JIT POOL") { facts.smallPool = true }
+            // Require the "MB" suffix so err:virtual ("size=0x23000000") and
+            // FEXBridge ("size=587202560, used=...") never clobber facts.poolMB.
             if let r = line.range(of: "JIT pool: RX="), let s = line[r.upperBound...].range(of: "size=") {
-                facts.poolMB = Int(line[s.upperBound...].prefix { $0.isNumber })
+                let rest = line[s.upperBound...]
+                let digits = rest.prefix { $0.isNumber }
+                if !digits.isEmpty, rest.dropFirst(digits.count).hasPrefix("MB"),
+                   let value = Int(digits) {
+                    facts.poolMB = value
+                }
             }
             if line.hasPrefix("[jit-pool] ") {
                 if let used = LogSummary.hexPair(line, after: "used=0x") ?? LogSummary.hexPair(line, after: "bump=0x") {

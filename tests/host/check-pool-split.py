@@ -145,6 +145,12 @@ assert 'poolHole = bOff > aSize ? (off: aSize, end: bOff) : nil' in swift
 assert swift.count('splitHoles(aSize: poolSize, bOff: holeEnd, rxBase: rxAddrV)') == 2
 assert 'VM_FLAGS_OVERWRITE' in swift and 'rw + (rxB - rxA)' in swift, 'one RW alias, one RX->RW distance'
 assert 'gapHitsWindow' in swift, 'the hole may never hold the executable window'
+win_plug = swift[swift.index('if !skipWindow && !windowHeld {'):swift.index('var holes: [(base: vm_address_t, size: vm_address_t)] = []')]
+assert 'freeRuns(exeWinBase, exeWinBase + exeWinSize, minSize: 0x4000)' in win_plug and 'plugs.append(' in win_plug, \
+    'when the window is not held whole, free space inside it must be plugged before the census and RX placement'
+census_clip = swift[swift.index('var holes: [(base: vm_address_t, size: vm_address_t)] = []'):swift.index('let largest = holes.map { $0.size }.max() ?? 0')]
+assert '!skipWindow && prevEnd < winEnd && start > exeWinBase' in census_clip, \
+    'the hole census must clip out the executable window'
 hole_env = content[content.index('if let hole = StikJITHelper.poolHole {'):][:300]
 assert 'setenv("WINE_IOS_JIT_HOLE", String(format: "%lx:%lx", hole.off, hole.end), 1)' in hole_env
 assert 'unsetenv("WINE_IOS_JIT_HOLE")' in hole_env

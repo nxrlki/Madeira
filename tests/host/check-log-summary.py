@@ -144,9 +144,20 @@ let healthyWindow = LogSummary.facts(lines: [
     "[wow-window] B=0x7200000000: reserved exactly 4GB; guard BORROWED from the inaccessible neighbour",
     "[wow-window] main-process window reserved (i386 main image)",
 ])
-let healthyWindowText = LogSummary.text(healthyWindow, source: "test")
-assert(healthyWindowText.contains("Problems found: none") && !healthyWindowText.contains("could not reserve"))
+assert(LogSummary.text(healthyWindow, source: "test").contains("Problems found: none") && !LogSummary.text(healthyWindow, source: "test").contains("could not reserve"))
 assert(!text.contains("could not be allocated") && !text.contains("could not reserve"))
+
+// Wine err:virtual logs the pool size in hex bytes ("size=0x23000000") and FEXBridge logs
+// raw decimal bytes ("size=587202560, used=0"); neither may clobber poolMB to 0 or bytes.
+let hexSizePool = LogSummary.facts(lines: [
+    "[WineProc] Target exe: C:\\Program Files (x86)\\Steam\\steamapps\\common\\Cult of the Lamb\\Cult Of The Lamb.exe",
+    "[20:49:15.100] [ERR] ml1036: no hole fits a 896MB pool — SHRINKING to 560MB",
+    "[20:49:15.654] [OK] JIT pool: RX=0x148000000, RW=0x7000000000, size=560MB",
+    "0024:err:virtual:mprotect_exec iOS JIT pool: RX=0x148000000 RW=0x7000000000 size=0x23000000",
+    "JIT pool: RX=0x148000000, RW=0x7000000000, size=587202560, used=0",
+])
+let hexSizePoolText = LogSummary.text(hexSizePool, source: "test")
+assert(hexSizePool.poolMB == 560 && hexSizePoolText.contains("got 560 MB instead of 896 MB") && !hexSizePoolText.contains("0 MB"))
 
 // A launch with no session leaves the last summary alone; a file is read across 1 MB chunks.
 let dir = URL(fileURLWithPath: CommandLine.arguments[1])
@@ -175,6 +186,7 @@ assert((try! String(contentsOf: kept, encoding: .utf8)).contains("v8.dll"))
 assert(LogSummary.write(from: kept, source: "kept") && FileManager.default.fileExists(atPath: kept.path))
 print("PASS: log summary finds fatal startup failures, the small JIT pool, the pool running out, out-of-memory and wrong-architecture DLLs, exit codes per program, Quit and Force close, and Madeira Dock's result")
 '''
+assert 'rest.dropFirst(digits.count).hasPrefix("MB")' in summary, 'facts.poolMB must require an MB suffix'
 if not Path(SWIFTC).exists():
     if '--require-swift' in sys.argv: sys.exit('FAIL: Swift compiler unavailable')
     print('SKIP: Swift compiler unavailable locally'); sys.exit(0)

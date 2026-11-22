@@ -17,10 +17,11 @@ This port supplies that unix side in `libntdll_unix.a`, bound by name in
 
 **32-bit (WoW64) and 64-bit (ARM64EC) processes both get it.** The ARM64EC
 farm ships `winegstreamer.dll` and `wmadmod.dll`, so an x64 program's xWMA
-voices (XAudio2/FAudio's WMA decoder DMO) decode instead of playing silence.
-A 64-bit process gets the WMA transform only: its `wg_parser` (quartz / Media
-Foundation source) is refused as before unless `MADEIRA_WG_64BIT=1`.
-`MADEIRA_WG_64BIT=0` gives 64-bit processes the generic stub table again.
+voices (XAudio2/FAudio's WMA decoder DMO) decode instead of playing silence,
+and 64-bit Media Foundation / DirectShow `wg_parser` sources (MP4/MOV/MP3/WAV)
+are enabled by default too. `MADEIRA_WG_64BIT=0` gives 64-bit processes the
+generic stub table again, and `MADEIRA_WG_PARSER=0` turns off `wg_parser`
+alone without affecting WMA.
 
 ## Pieces
 
@@ -50,10 +51,10 @@ Environment variables (`env.NAME = value` in `madeira.cfg`):
 
 | Variable | Default | Effect |
 |---|---|---|
-| `MADEIRA_WG_64BIT` | WMA only | `0`: 64-bit processes get the stub table again; `1`: their `wg_parser` too (see above). |
+| `MADEIRA_WG_64BIT` | on | `0`: 64-bit processes get the generic stub table again (both WMA and `wg_parser` off). |
 | `MADEIRA_WG_PARSER` | on | `0`: `wg_parser_create` returns `STATUS_NOT_IMPLEMENTED` again, as before this series; quartz and the MF source then fail the way they did. The WMA decoder is unaffected. |
 | `MADEIRA_WG_VIDEO` | on | `0`: MP3/WAV only; an MP4/MOV is refused at connect. |
-| `MADEIRA_WG_VIDEO_FORMAT` | `nv12` | Native format a video stream reports: `nv12`, `i420`, `yv12`, `yuy2`, `rgb32`, `argb32` or `abgr32`. |
+| `MADEIRA_WG_VIDEO_FORMAT` | `rgb32` | Native format a video stream reports: `rgb32`, `nv12`, `i420`, `yv12`, `yuy2`, `argb32` or `abgr32` (plus the YUV list appended by `media_source.c`). |
 | `MADEIRA_WMA_SEARCH` | on | `0`: keep the WMA v1/v2 decoder at the bit rate and flags it opened with; no search over other candidates when a bit-reservoir stream fails. A packet that fails is concealed with silence of its length and the next one is decoded as usual. (An xWMA stream still opens at the rate libavformat's xWMA table normalises to.) |
 | `MADEIRA_WMA_DUMP` | off | Set: write each WMA decoder's input to `wma-dump-<n>.bin` in the Documents folder, for reproducing a decode failure on a host. |
 

@@ -16,6 +16,11 @@ assert(JITPoolMeter.text(JITPoolMeter.current) == nil)
 JITPoolMeter.note("[22:02:40.904] [ERR] ml1036: no hole fits a 896MB pool — SHRINKING to 560MB")
 JITPoolMeter.note("[22:02:41.548] [OK] JIT pool: RX=0x148000000, RW=0x7000000000, size=560MB")
 assert(JITPoolMeter.text(JITPoolMeter.current) == "JIT 0/560 MB (small)")
+// Wine err:virtual logs the same pool in hex bytes ("size=0x23000000") and FEXBridge
+// logs raw decimal bytes ("size=587202560, used=0"); neither may overwrite sizeMB.
+JITPoolMeter.note("0024:err:virtual:mprotect_exec iOS JIT pool: RX=0x148000000 RW=0x7000000000 size=0x23000000")
+JITPoolMeter.note("JIT pool: RX=0x148000000, RW=0x7000000000, size=587202560, used=0")
+assert(JITPoolMeter.current.sizeMB == 560 && JITPoolMeter.text(JITPoolMeter.current) == "JIT 0/560 MB (small)")
 JITPoolMeter.note("[jit-pool] image 0x119810000+0x70000 (?) → pool 0x148004000 used=0x78000/0x23000000 tramp+0x4000")
 JITPoolMeter.note("[jit-pool] reused freed range off=0x1000 size=0x2000 (freelist 1 ranges) no-madvise")
 JITPoolMeter.note("[jit-pool] image 0x71ffcf0000+0x110000 (ntdll.dll) → pool 0x148078000 used=0x17600000/0x23000000 tramp+0x8000")
@@ -63,13 +68,15 @@ print("PASS: JIT memory overlay: size from setup, use from loads, small pool, FU
 '''
 # With Live logs off the tail still reads the file (once a second), so the pool's lines
 # reach the meter; LogStore notes them before it drops a hidden line.
+meter = (root / 'app/Madeira/JITPoolMeter.swift').read_text()
+assert 'rest.dropFirst(digits.count).hasPrefix("MB")' in meter, 'size= must require an MB suffix'
 tail = (root / 'app/Madeira/LogTail.swift').read_text()
 store = (root / 'app/Madeira/LogStore.swift').read_text()
 assert 'if self.displayPaused { self.readWhilePaused() } else { self.readAvailable() }' in tail
 assert 'guard fd >= 0, !displayPaused else { return }' not in tail and 'guard pausedTicks >= 4 else { return }' in tail
 handle = store[store.index('private func handleRawLine('):]
 assert handle.index('JITPoolMeter.note(raw)') < handle.index('if suppressed { return }')
-print("PASS: the meter counts with Live logs off")
+print("PASS: the meter counts with Live logs off and requires an MB suffix for pool size")
 with tempfile.TemporaryDirectory(prefix='madeira-jit-meter-') as directory:
     source = Path(directory) / 'main.swift'; binary = Path(directory) / 'check'
     source.write_text((root / 'app/Madeira/JITPoolMeter.swift').read_text() + '\n' + checks)

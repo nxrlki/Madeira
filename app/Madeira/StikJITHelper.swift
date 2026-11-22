@@ -584,6 +584,31 @@ enum StikJITHelper {
         } else if exeWinWantedMB > 0 {
             LogStore.shared.log("[exe-window] exe-window-mb = \(exeWinWantedMB) ignored: the executable window is not held", level: .error)
         }
+        // When the 128MB executable window could not be held whole (e.g. a small
+        // mapping landed inside [0x140000000, 0x148000000)), plug its free
+        // sub-runs for the census and RX placement. Otherwise releasing the early
+        // pool placeholder merges it with the trailing free gap inside the window
+        // (e.g. 0x147800000+565MB), inflating the census and letting first-fit
+        // land inside [0x140000000, 0x148000000) ("swallows the 0x140000000
+        // executable window" -> BAD POOL). Released with `plugs` right after RX.
+        if !skipWindow && !windowHeld {
+            var pluggedBytes: vm_address_t = 0
+            for run in freeRuns(exeWinBase, exeWinBase + exeWinSize, minSize: 0x4000) {
+                var a = run.base
+                if vm_allocate(mach_task_self_, &a, vm_size_t(run.size), 0 /* VM_FLAGS_FIXED */) == KERN_SUCCESS {
+                    if a == run.base {
+                        plugs.append((a, vm_size_t(run.size)))
+                        pluggedBytes += run.size
+                    } else {
+                        vm_deallocate(mach_task_self_, a, vm_size_t(run.size))
+                    }
+                }
+            }
+            if pluggedBytes > 0 {
+                LogStore.shared.log(String(format: "ml1034: plugged %luMB of free space inside [0x%lx,0x%lx) for RX placement (windowHeld=false)",
+                                           Int(pluggedBytes >> 20), Int(exeWinBase), Int(exeWinBase + exeWinSize)))
+            }
+        }
         do {
             var holes: [(base: vm_address_t, size: vm_address_t)] = []
             var addr = vm_address_t(goodLow)
@@ -600,7 +625,19 @@ enum StikJITHelper {
                 }
                 if kr != KERN_SUCCESS { break }
                 let start = min(addr, vm_address_t(guestLo))
-                if start > prevEnd && start - prevEnd >= 64 << 20 { holes.append((prevEnd, start - prevEnd)) }
+                let winEnd = exeWinBase + exeWinSize
+                if start > prevEnd {
+                    if !skipWindow && prevEnd < winEnd && start > exeWinBase {
+                        if prevEnd < exeWinBase && exeWinBase - prevEnd >= 64 << 20 {
+                            holes.append((prevEnd, exeWinBase - prevEnd))
+                        }
+                        if start > winEnd && start - winEnd >= 64 << 20 {
+                            holes.append((winEnd, start - winEnd))
+                        }
+                    } else if start - prevEnd >= 64 << 20 {
+                        holes.append((prevEnd, start - prevEnd))
+                    }
+                }
                 prevEnd = max(prevEnd, addr + vm_address_t(rsize))
                 addr = prevEnd
             }

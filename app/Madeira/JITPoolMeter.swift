@@ -49,9 +49,17 @@ enum JITPoolMeter {
     static func next(_ previous: State, _ line: String) -> State {
         var s = previous
         if line.contains("no hole fits a ") { s.shrunk = true }
+        // Match only the app's MB-suffixed setup line ("size=560MB"), ignoring
+        // virtual_ios.c's hex byte log ("size=0x23000000", whose leading "0"
+        // otherwise overwrote sizeMB with 0 whenever err:virtual was unmuted)
+        // and FEXBridge.mm's raw decimal byte log ("size=587202560, used=...").
         if let r = line.range(of: "JIT pool: RX="), let size = line[r.upperBound...].range(of: "size=") {
-            let value = UInt64(line[size.upperBound...].prefix { $0.isNumber })
-            if let value, value <= UInt64.max >> 20 { s.sizeMB = Int(value) }
+            let rest = line[size.upperBound...]
+            let digits = rest.prefix { $0.isNumber }
+            if !digits.isEmpty, rest.dropFirst(digits.count).hasPrefix("MB"),
+               let value = UInt64(digits), value <= UInt64.max >> 20 {
+                s.sizeMB = Int(value)
+            }
         }
         if let r = line.range(of: "[jit-pool] ") {
             let rest = line[r.upperBound...]
